@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>4.1.1</version>
+    <relativePath/>
+  </parent>
+
+  <groupId>com.reconcile</groupId>
+  <artifactId>reconcile</artifactId>
+  <!-- 1.0.0, not a snapshot. The release checklist in RELEASE.md is the authority on what a tag
+       means; this version is the one the CHANGELOG describes. -->
+  <version>1.0.0</version>
+  <name>reconcile</name>
+  <description>Payment &amp; Settlement Reconciliation Engine</description>
+
+  <properties>
+    <!-- Decision D12: Tomcat is pinned two patch releases ahead of what Spring Boot 4.1.1
+         manages (11.0.24 -> 11.0.26).
+
+         Why a pin rather than waiting for a framework bump: Spring Boot 4.1.1 is the latest
+         stable release, and it manages Tomcat 11.0.24, which is inside the affected range of
+         CVE-2026-65182 and two others. The fixes landed in Tomcat 11.0.25 and 11.0.26.
+         `tomcat.version` is Spring Boot's own supported override for this, and the bump stays
+         inside the 11.0.x line, so it is a servlet-container patch rather than a version Spring
+         never tested.
+
+         What it buys, stated precisely: the vulnerable code is Tomcat's `<security-constraint>`
+         processing, and this application does not use it — authorisation is Spring Security's
+         filter chain and the container's authenticators are explicitly disabled. So this is
+         removing an advisory from the tree, not closing a live exploit path. The reasoning and
+         the evidence are in docs/security/dependency-findings.md.
+
+         Re-check this pin whenever Spring Boot is upgraded: a Boot release that manages a
+         Tomcat at or above 11.0.26 makes it dead weight, and a Boot release that moves off
+         11.0.x entirely makes it wrong. -->
+    <tomcat.version>11.0.26</tomcat.version>
+
+    <!-- Decision D11: the build runs only on Java 25, in Docker. The local JDK 21 must not
+         quietly satisfy this build; `release 25` makes an older JDK fail loudly. -->
+    <java.version>25</java.version>
+    <maven.compiler.release>25</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <archunit.version>1.4.1</archunit.version>
+    <!-- springdoc 3.x is the line that supports Spring Boot 4; 2.x is Boot 3 only. The `-api`
+         artifact, not `-ui`: E2E-API-01 asks for a specification to diff against, not a browser
+         console, and the UI would drag in a webjars bundle this application has no use for. -->
+    <springdoc.version>3.1.1</springdoc.version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-validation</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-security</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+
+    <!-- Generates the OpenAPI description of the running application, which is what
+         `docs/openapi/reconcile-v1.yaml` is diffed against. Without a generator the committed
+         document is a second, hand-maintained copy of the contract, and the two drift silently. -->
+    <dependency>
+      <groupId>org.springdoc</groupId>
+      <artifactId>springdoc-openapi-starter-webmvc-api</artifactId>
+      <version>${springdoc.version}</version>
+    </dependency>
+
+    <!-- Spring Boot 4 moved the Flyway auto-configuration into its own module, so the Flyway core
+         jar alone is not enough: the app would start, connect, and silently run against an empty
+         schema. This starter is the supported entry point. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-flyway</artifactId>
+    </dependency>
+    <!-- PostgreSQL support is NOT in Flyway core since Flyway 10; this artifact is required
+         or Flyway does not recognise the database and the app refuses to start. -->
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-database-postgresql</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+
+    <!-- test -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.security</groupId>
+      <artifactId>spring-security-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-postgresql</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.tngtech.archunit</groupId>
+      <artifactId>archunit-junit5</artifactId>
+      <version>${archunit.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <!-- Unit tests only here; integration tests (*IT) run under failsafe during `verify`,
+               so `mvn test` stays fast and `mvn verify` is the full gate. -->
+          <includes>
+            <include>**/*Test.java</include>
+          </includes>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
+        <configuration>
+          <includes>
+            <include>**/*IT.java</include>
+          </includes>
+        </configuration>
+        <executions>
+          <execution>
+            <goals>
+              <goal>integration-test</goal>
+              <goal>verify</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

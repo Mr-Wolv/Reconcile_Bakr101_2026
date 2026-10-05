@@ -1,0 +1,311 @@
+name: security
+
+# The scans that cannot gate a pull request, plus the one that can.
+#
+# WHY THIS FILE EXISTS SEPARATELY FROM dependency-scan.yml
+# -------------------------------------------------------
+# `dependency-scan.yml` runs OWASP dependency-check against the NVD. That is the right tool and it
+# is slow: a cold NVD download is tens of minutes and any network hiccup fails the run. It stays
+# scheduled and manual.
+#
+# This file runs the three checks that are fast enough to be worth trusting, and that therefore
+# have something to prove by existing:
+#
+#   osv   - queries OSV for the exact artifacts Maven resolves. Public API, no key, seconds.
+#           This is the check that can run on every push, so it is the one that gates.
+#   deps  - GitHub's own dependency review, on pull requests. A *different* database from OSV
+#           (the GitHub Advisory Database), which is the point: it is not the same evidence
+#           twice, and unlike OWASP dependency-check it needs no NVD access and no API key.
+#   sast  - Semgrep over the source. Gating at ERROR severity only: a rule that fires on every
+#           commit is a rule that gets switched off, and a disabled check reports nothing.
+#   score - OSSF Scorecard, the supply-chain posture checks (branch protection, pinned actions,
+#           signed releases, dangerous workflows). Non-gating: it reports on the repository rather
+#           than on the code, so it starts red on any new repository and is a to-do list, not a
+#           build failure.
+#   zap   - an OWASP ZAP baseline scan against the running image. Scheduled only, and
+#           non-gating, because a baseline scan on a first run reports findings nobody has triaged
+#           yet and a red build nobody can act on is theatre. It uploads its report instead.
+#
+# WHAT REPLACED WHAT
+# ------------------
+# OWASP dependency-check against the NVD is deliberately *not* here, and `dependency-scan.yml`
+# keeps it for when an NVD API key exists. It cannot run without one: a cold sync of NVD API 2.0
+# is roughly 250k requests, which is about seventeen days on the anonymous endpoint's five-per-
+# thirty-seconds. `osv` and `deps` together cover the same ground with two independent databases,
+# in seconds, with no secret to manage. That is a real substitution and not the same claim as
+# "we run dependency-check" - see docs/roadmap.md for the difference.
+#
+# WHAT IT DOES NOT DO
+# -------------------
+# It does not claim these have been executed. Nothing in this repository can execute a GitHub
+# Actions workflow, so every job here is unrun code until a runner runs it. That is stated in
+# README.md's limitations rather than glossed over, and it is the reason the gates below are set
+# conservatively: the first execution of a job should tell you something useful, not block a
+# release over an untriaged finding.
+#
+# Actions are pinned to commit SHAs, and scripts/pin_actions.py --check enforces it (D-01: this
+# comment previously said they were "referenced by tag", which had stopped being true). A tag can
+# be moved after the fact; a SHA cannot, so the SHA is the correct unit for a security gate. The
+# `# v4`-style comment beside each reference is there so a reviewer can read the intent without a
+# network round trip.
+
+on:
+  schedule:
+    # 04:23 UTC on Monday and Thursday. Off-round minutes, deliberately - every repository that
+    # uses `0 4 * * *` is queued for the same instant and the shared runner pool is the
+    # bottleneck exactly then.
+    - cron: "23 4 * * 1,4"
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  osv:
+    name: OSV dependency scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      # `dependency:tree` writes exactly the coordinates OSV is asked about. Scanning
+      # pom.xml instead would query declared versions and miss every transitive dependency,
+      # which is where CVEs actually live.
+      - name: Resolve the dependency graph
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3  # v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - name: Write the resolved dependency graph
+        run: mvn -B -ntp dependency:tree -DoutputFile=target/deptree.txt -DappendOutput=false
+
+      # Exits non-zero only on an advisory that is not in docs/security/osv-baseline.json, which
+      # holds the seven already triaged in docs/security/dependency-findings.md. A gate that
+      # reports the same seven forever is a gate nobody reads.
+      - name: Query OSV
+        run: python3 scripts/osv_check.py
+
+      # F-11. The Dependency-Check summary is a checked-in script with its own fixture tests,
+      # because the version this replaces was an inline heredoc reading a JSON path that
+      # Dependency-Check does not emit — so it reported "0 vulnerable dependencies" on a report
+      # full of them, and no test could catch it, because a parser exercised only by a scheduled
+      # job cannot be exercised at all.
+      - name: Test the dependency-report parser against known findings
+        run: python3 scripts/test_dependency_check_summary.py
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: osv-report
+          path: target/deptree.txt
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  deps:
+    name: GitHub Advisory dependency review
+    # Pull requests only. The action answers "what did this pull request *add*", which is
+    # meaningless without a base to compare against - it has no answer on a push, and none on
+    # the first commit of a repository.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      # `fail-on-severity: high` rather than the default. A moderate advisory added to a
+      # simulated payment engine is a decision to record, not a build to block; a high or
+      # critical one is not.
+      - name: Review the dependencies this pull request adds
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294  # v5.0.0
+        with:
+          fail-on-severity: high
+
+  # ---------------------------------------------------------------------------
+  score:
+    name: OSSF Scorecard
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Non-gating. Scorecard measures the repository, not the code: a repository with one commit
+    # and no branch protection scores badly by construction, and gating on that would mean a red
+    # build that a code change cannot possibly fix. It produces the to-do list instead.
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+
+      - name: Run Scorecard
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc  # v2.4.4
+        with:
+          results_file: scorecard.sarif
+          results_format: sarif
+          # Deliberately NOT published. Publishing asks for `id-token: write` and
+          # `security-events: write`, which are the most powerful permissions this repository
+          # would ever hold, and it is not worth granting them for a check nobody is reading in
+          # the Security tab yet. The SARIF is uploaded as an artifact instead; turning
+          # publishing on is a one-line change once someone actually watches that tab.
+          publish_results: false
+
+      - name: Show the checks that failed
+        if: always()
+        run: |
+          test -f scorecard.sarif || { echo "::warning::no Scorecard results"; exit 0; }
+          python3 - <<'PY'
+          import json, sys
+          with open("scorecard.sarif") as fh:
+              sarif = json.load(fh)
+          for run in sarif.get("runs", []):
+              tool = run.get("tool", {}).get("driver", {}).get("name", "scorecard")
+              for result in run.get("results", []):
+                  score = result.get("properties", {}).get("score")
+                  print(f"  {tool} {result.get('check_id')}: {score}")
+          PY
+
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: scorecard-sarif
+          path: scorecard.sarif
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  sast:
+    name: Semgrep static analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      # Semgrep is run as a CLI rather than through `returntocorp/semgrep-action`. That action is a
+      # Docker action declaring four inputs — config, icon, colour, publishToken — and it declares
+      # neither `sarif` nor `output` nor `generateSarif`. Passing them is not an error; GitHub sets
+      # INPUT_* variables and the action ignores the ones it does not declare, so the SARIF this job
+      # then asserts on would never have been written and the gate below would fail on every run for
+      # a reason that looks like "Semgrep found something" and is not. The successor action could
+      # not be verified from here, so the CLI is used directly: one fewer third-party action to
+      # trust, and every flag is visible in this file.
+      #
+      # `p/spring` rather than `--config auto`. The automatic ruleset is the largest and slowest and
+      # changes under you; a pinned ruleset makes a red build reproducible, which is the only
+      # property that makes a gate worth having.
+      - name: Run Semgrep
+        run: |
+          python3 -m pip install --quiet semgrep
+          # No `--error` here: the gate is the SARIF parse in the next step, so that what fails the
+          # build is visible in this repository rather than buried in a tool's exit-code policy.
+          semgrep scan --config p/spring --sarif --output semgrep.sarif --quiet src
+
+      - name: Fail on ERROR-severity findings
+        # Done by hand rather than trusting the action's exit code, because the action's severity
+        # threshold has changed between releases and a gate whose meaning drifts is not a gate.
+        run: |
+          if [ ! -s semgrep.sarif ]; then
+            echo "::error::no SARIF at semgrep.sarif - the scan did not run"
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json, sys
+          with open("semgrep.sarif") as fh:
+              sarif = json.load(fh)
+          blocking = []
+          for run in sarif.get("runs", []):
+              for result in run.get("results", []):
+                  level = (result.get("level") or "").upper()
+                  if level in ("ERROR", "BLOCKER"):
+                      blocking.append(result)
+          print(f"{len(blocking)} ERROR-severity finding(s)")
+          for result in blocking[:20]:
+              where = result.get("locations", [{}])[0].get("physicalLocation", {})
+              print(f"  {result.get('check_id')} {where.get('artifactLocation', {}).get('uri')}"
+                    f":{where.get('region', {}).get('startLine')}")
+          sys.exit(1 if blocking else 0)
+          PY
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: semgrep-sarif
+          path: semgrep.sarif
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  zap:
+    name: ZAP baseline scan
+    runs-on: ubuntu-latest
+    # Not gating. A baseline scan reports everything it can find, including findings that are
+    # correct for this system (a bearer-token API answers 401 to a scanner's unauthenticated
+    # probe). Its job here is to produce evidence, not to stop a release.
+    continue-on-error: true
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Build and start the stack
+        run: docker compose up -d --build app
+
+      - name: Wait for the app to report healthy
+        run: |
+          for i in $(seq 1 60); do
+            state=$(docker inspect --format '{{.State.Health.Status}}' \
+              "$(docker compose ps -q app)" 2>/dev/null || echo missing)
+            if [ "$state" = "healthy" ]; then
+              echo "healthy after $i checks"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::the app never became healthy"
+          docker compose logs --no-color app | tail -80
+          exit 1
+
+      # `--network=host` so the container can reach the compose-published port on localhost, which
+      # is how `docker-compose.yml` publishes it.
+      - name: Baseline scan
+        run: |
+          docker run --rm --network=host \
+            -v "$PWD/zap-report:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t http://127.0.0.1:8080 -r zap-report.html -J zap-report.json
+
+      - name: Report
+        if: always()
+        run: |
+          test -f zap-report.html || { echo "::warning::no ZAP report produced"; exit 0; }
+          python3 - <<'PY'
+          import json, sys
+          with open("zap-report.json") as fh:
+              report = json.load(fh)
+          for site, site_report in report.items():
+              for alert in site_report.get("alerts", []):
+                  print(f"{alert.get('riskdesc')}: {alert.get('alert')}")
+          PY
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: zap-report
+          path: zap-report.html
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

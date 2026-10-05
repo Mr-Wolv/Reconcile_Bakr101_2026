@@ -1,0 +1,47 @@
+# Dependency vulnerability scanning.
+#
+# The repository is public and its dependency tree has never been scanned for known
+# vulnerabilities. That is the largest outstanding risk in it, and it is not visible
+# from the code: Spring Boot 4.1.1, Jackson 3, Testcontainers 2 and springdoc 3.1.1 are all
+# recent enough that "probably fine" is an assumption rather than a finding.
+#
+# Dependabot alerts on GitHub's own advisory database and needs no API key, no network
+# access from the build, and no NVD mirror. It is the reason this file exists instead of a
+# build plugin: a scanner that cannot run in this environment is not a scanner.
+#
+# The OWASP dependency-check plugin is the complement, not the replacement, and is
+# deliberately NOT wired into `mvn verify` here. It needs to download the NVD, which takes
+# minutes on a cold cache and fails the build on any network hiccup. It belongs in a nightly
+# job with an explicit CVSS failure threshold, never in the path that gates a pull request.
+
+version: 2
+
+updates:
+  # The application and its libraries.
+  - package-ecosystem: maven
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    # A pull request per bump, rather than a batched digest nobody reads.
+    open-pull-requests-limit: 5
+    groups:
+      # Patch and minor bumps of Boot and its BOM are low-risk together and painful apart.
+      spring-boot:
+        patterns: ["org.springframework*", "org.springframework.boot*"]
+        update-types: ["minor", "patch"]
+      test-infrastructure:
+        patterns: ["org.testcontainers*", "org.junit*", "org.assertj*", "org.archunit*"]
+
+  # The build and the probe are part of the product's security posture: the probe is a CI
+  # gate, and a compromised action can rewrite what the gate reports.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5

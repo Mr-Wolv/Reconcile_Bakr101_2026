@@ -1,0 +1,117 @@
+spring:
+  application:
+    name: reconcile
+
+  autoconfigure:
+    # Boot's default in-memory `user` account. This build authenticates with bearer tokens via
+    # BearerTokenAuthenticationFilter, so that store has exactly one effect: Boot generates a
+    # password at every start and logs it, and a working credential exists that nobody chose and
+    # nobody can revoke. Excluding it removes both. Boot 4 moved this class out of
+    # spring-boot-autoconfigure into spring-boot-security, so the name is
+    # org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration.
+    exclude:
+      - org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration
+
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:55433/reconcile}
+    username: ${SPRING_DATASOURCE_USERNAME:reconcile}
+    password: ${SPRING_DATASOURCE_PASSWORD:reconcile}
+    hikari:
+      maximum-pool-size: 10
+      pool-name: reconcile-pool
+
+  jpa:
+    # The schema is owned by Flyway. Hibernate must never create or alter it - `validate` proves
+    # the JPA mappings still agree with V1__baseline.sql, which is a check worth having.
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+
+  flyway:
+    enabled: true
+    # No baselineOnMigrate: an unexpected schema should stop the app, not be silently adopted.
+    locations: classpath:db/migration
+
+  jackson:
+    default-property-inclusion: non_null
+    deserialization:
+      fail-on-unknown-properties: true   # never silently drop an unrecognised payment field
+
+server:
+  port: 8080
+  error:
+    include-message: never
+    include-stacktrace: never
+  shutdown: graceful
+
+reconcile:
+  security:
+    # Secrets come from the environment only. They are never stored in the database, never logged
+    # and never committed. Startup outside `dev` fails if a default is still configured.
+    operator-token: ${RECONCILE_OPERATOR_TOKEN:}
+    admin-token: ${RECONCILE_ADMIN_TOKEN:}
+    default-tokens:
+      - dev-operator-token
+      - dev-admin-token
+  provider:
+    webhook-secret: ${RECONCILE_PSP_WEBHOOK_SECRET:}
+    default-webhook-secrets:
+      - dev-webhook-secret
+    signature-window: 5m
+    # Where `POST /api/v1/provider/sync` pulls from. It defaults to this application's own
+    # simulator so the demos and CI scenarios work out of the box; a real deployment points it at
+    # the PSP. The timeout is short on purpose: a pull that hangs is not a reconciliation.
+    sync-base-url: ${RECONCILE_PSP_BASE_URL:http://127.0.0.1:8080/api/v1/provider}
+    sync-timeout: 5s
+    # The credential the pull presents. It defaults to the operator token purely so that the
+    # simulator default above works unaided; against a real PSP this must be that PSP's own
+    # credential, because an inbound role token is not an outbound provider credential.
+    sync-token: ${RECONCILE_PSP_SYNC_TOKEN:${RECONCILE_OPERATOR_TOKEN:}}
+  idempotency:
+    retention: 24h
+    # How often expired records are reclaimed. Separate from `retention` because retention is a
+    # promise to clients and this is an operational choice; both default to one hour's worth.
+    sweep-interval: 1h
+  reconciliation:
+    # How often the scheduler looks for batches that were created but not yet run. Seconds, not
+    # minutes: this is how long an operator waits after POSTing a batch with the default
+    # `async: true`, and there is no recurring report for a slow cadence to suit. It was previously
+    # configured here and read by nothing, which is why async batches never ran at all.
+    poll-interval: 2s
+    # How long a batch may stay RUNNING before /health calls it abandoned. A claim, not a lock: see
+    # ReconcileProperties.Reconciliation for why erring towards false alarms is the right direction.
+    lease: 30m
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when-authorized
+
+logging:
+  pattern:
+    level: "%5p [requestId:%X{requestId:-}]"
+  level:
+    com.reconcile: INFO
+
+---
+spring:
+  config:
+    activate:
+      on-profile: test
+  flyway:
+    clean-disabled: false
+
+logging:
+  level:
+    com.reconcile: DEBUG
+    org.flywaydb: INFO

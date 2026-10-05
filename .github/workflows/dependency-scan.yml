@@ -1,0 +1,116 @@
+name: dependency-scan
+
+# OWASP dependency-check against the NVD. THE THIRD OPINION, NOT THE ONLY ONE.
+#
+# `.github/workflows/security.yml` already gates on OSV and on the GitHub Advisory Database, both
+# keyless and both measured in seconds. This job exists because those two share a blind spot: they
+# query a database by coordinate, while dependency-check reads bytecode, so it is the only one of
+# the three that catches a shaded or repackaged artifact whose coordinate looks innocent. Two cheap
+# sources and one expensive one is the right shape - but see below for why this one is deferred
+# rather than merged into the pull-request gate.
+#
+# WHY IT IS SCHEDULED AND MANUAL
+# ------------------------------
+# The NVD is enormous. A cold sync of API 2.0 is roughly 250k requests: about seventeen days on the
+# anonymous endpoint's five-per-thirty-seconds, and about a day and a half even with an API key. Put
+# that on the path that gates every push and it fails every push for a reason unrelated to the
+# change. This job needs the cache below *and* an `NVD_API_KEY` repository secret to finish in a
+# sane window; with neither it does not time out so much as never finish.
+#
+# An earlier version of this file claimed a key made the run "minutes" and gave the job 45 minutes
+# to do it. On a *cold* cache that is not close to enough, and the claim was wrong. Both are fixed
+# below. What is still deferred is the key itself - see docs/roadmap.md.
+#
+# Run it from Actions, or locally with:
+#   ./scripts/verify.sh org.owasp:dependency-check-maven-plugin:check \
+#       -Ddependency-check.failBuildOnCVSS=7 \
+#       -Dformat=JSON -DsuppressionFile=docs/security/dependency-suppressions.xml
+
+on:
+  schedule:
+    # Sunday 04:17 UTC. An off-round minute, deliberately: every repository that uses
+    # `0 4 * * *` is queued for the same instant, and the shared runner pool is the
+    # bottleneck exactly then.
+    - cron: "17 4 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    # Hours, not minutes, for the first run. Every run after the cache is warm is quick; this
+    # timeout is sized for the cold one rather than pretending it will not happen.
+    timeout-minutes: 300
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      # Without this the job starts from an empty NVD store on every run and cannot complete in
+      # any realistic window. Keyed on the run id with a prefix restore, so consecutive runs share
+      # the store and the NVD's own weekly refresh still flows through it.
+      - name: Restore the NVD store
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        with:
+          path: ~/.m2/repository/org/owasp/dependency-check/data
+          key: nvd-${{ github.run_id }}
+          restore-keys: |
+            nvd-
+
+      - name: Build the dependency graph and scan it
+        env:
+          # Without a key the NVD falls back to its rate-limited anonymous endpoint, which turns a
+          # cold sync into about seventeen days. The job is correct without it; it is not
+          # *finishable* without it, and that distinction is the whole reason the timeout above is
+          # five hours rather than one.
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: |
+          docker run --rm \
+            --mount type=bind,src="$PWD",dst=/build \
+            -w /build \
+            -v reconcile-m2:/root/.m2 \
+            maven:3.9-eclipse-temurin-25 \
+            mvn -B -ntp verify -DskipTests \
+              org.owasp:dependency-check-maven-plugin:12.1.0:check \
+              -Dformat=JSON \
+              -DfailBuildOnCVSS=7 \
+              -DsuppressionFile=docs/security/dependency-suppressions.xml
+
+      # A scanner that cannot fail is worse than no scanner. If the plugin produced no report
+      # at all - a download that silently produced nothing, a goal that never ran - this fails
+      # the job. A green run here has to mean a scan happened.
+      - name: Assert the scan actually produced a report
+        run: |
+          report=target/dependency-check-report.json
+          if [ ! -s "$report" ]; then
+            echo "::error::no report at $report - the scan did not run"
+            exit 1
+          fi
+          echo "report: $(wc -c < "$report") bytes"
+
+      # F-11. This used to be an inline heredoc reading
+      # report["report"]["vulnerableSoftware"], which is not the shape Dependency-Check writes, so it
+      # printed "0 vulnerable dependencies" on a report full of them and exited 0. The Maven goal's
+      # own failBuildOnCVSS=7 is the build gate and was never affected - but a human-readable
+      # summary that reports nothing about a known finding is read as an all-clear, which is the
+      # same failure mode as a scanner that cannot fail.
+      #
+      # The parser is a checked-in script rather than inline here precisely because an inline parser
+      # can only be exercised by a scheduled job, which is how the wrong key path survived a
+      # review. scripts/test_dependency_check_summary.py drives it against fixtures containing a
+      # known high-severity finding, and .github/workflows/security.yml runs that test on every push.
+      - name: Summarise findings and fail at CVSS >= 7
+        run: |
+          python3 scripts/dependency_check_summary.py \
+            target/dependency-check-report.json 7.0 \
+            docs/security/dependency-suppressions.xml
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: dependency-check-report
+          path: target/dependency-check-report.json
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,1360 @@
+openapi: 3.1.0
+info:
+  title: Reconcile - payment & settlement reconciliation
+  description: |
+    Money movement, provider settlement ingestion, and reconciliation.
+
+    Every mutating endpoint requires an `Idempotency-Key` and replays a
+    stored response for 24 hours. Refusals are RFC 9457 problem
+    documents; the failure taxonomy is in `docs/spec/07-failure-matrix.md`
+    and the error table in `docs/spec/06-api-contract.md`.
+
+    Two routes are deliberately unauthenticated: `GET /api/v1/health`,
+    which a load balancer must be able to reach, and
+    `POST /api/v1/provider/webhooks`, which authenticates by HMAC
+    signature rather than by token.
+  license:
+    name: Proprietary
+  version: v1
+servers:
+- url: /
+  description: This application
+security:
+- bearerAuth: []
+paths:
+  /api/v1/reconciliation/cases/{id}/write-off:
+    post:
+      tags:
+      - reconciliation-controller
+      operationId: writeOff
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WriteOffRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+  /api/v1/reconciliation/cases/{id}/resolve:
+    post:
+      tags:
+      - reconciliation-controller
+      operationId: resolve
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+  /api/v1/reconciliation/cases/{id}/investigate:
+    post:
+      tags:
+      - reconciliation-controller
+      operationId: investigate
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InvestigateRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/CaseView"
+  /api/v1/reconciliation/batches:
+    get:
+      tags:
+      - reconciliation-controller
+      operationId: list
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BatchView"
+    post:
+      tags:
+      - reconciliation-controller
+      operationId: createBatch
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBatchRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/BatchView"
+  /api/v1/provider/webhooks:
+    post:
+      tags:
+      - provider-webhook-controller
+      operationId: receive
+      parameters:
+      - name: X-Provider-Event-Id
+        in: header
+        required: false
+        schema:
+          type: string
+      - name: X-Provider-Timestamp
+        in: header
+        required: false
+        schema:
+          type: string
+      - name: X-Provider-Signature
+        in: header
+        required: false
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: string
+  /api/v1/provider/sync:
+    post:
+      tags:
+      - provider-simulator-controller
+      operationId: sync
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SyncRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/SyncResult"
+  /api/v1/provider/payments:
+    post:
+      tags:
+      - provider-simulator-controller
+      operationId: register
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterPaymentRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/RegisteredPayment"
+  /api/v1/payouts:
+    post:
+      tags:
+      - payout-controller
+      operationId: execute
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExecutePayoutRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: string
+  /api/v1/payments:
+    get:
+      tags:
+      - payment-controller
+      operationId: list_1
+      parameters:
+      - name: state
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: merchantReference
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: providerTransactionId
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int32
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/PageResponsePaymentResponse"
+    post:
+      tags:
+      - payment-controller
+      operationId: create
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePaymentRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: string
+  /api/v1/payments/{id}/refund:
+    post:
+      tags:
+      - payment-controller
+      operationId: refund
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: string
+  /api/v1/payments/{id}/fail:
+    post:
+      tags:
+      - payment-controller
+      operationId: fail
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FailRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: string
+  /api/v1/payments/{id}/capture:
+    post:
+      tags:
+      - payment-controller
+      operationId: capture
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CaptureRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: string
+  /api/v1/payments/{id}/authorize:
+    post:
+      tags:
+      - payment-controller
+      operationId: authorize
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: string
+  /api/v1/ledger/transactions/{id}/reverse:
+    post:
+      tags:
+      - ledger-controller
+      operationId: reverse
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReverseRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: string
+  /api/v1/reconciliation/cases:
+    get:
+      tags:
+      - reconciliation-controller
+      operationId: openCases
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CaseView"
+  /api/v1/reconciliation/batches/{id}:
+    get:
+      tags:
+      - reconciliation-controller
+      operationId: get
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/BatchView"
+  /api/v1/reconciliation/batches/{id}/results:
+    get:
+      tags:
+      - reconciliation-controller
+      operationId: results
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ResultView"
+  /api/v1/provider/settlements:
+    get:
+      tags:
+      - provider-simulator-controller
+      operationId: settlements
+      parameters:
+      - name: windowStart
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: windowEnd
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items: {}
+  /api/v1/provider/events:
+    get:
+      tags:
+      - provider-simulator-controller
+      operationId: events
+      parameters:
+      - name: providerTransactionId
+        in: query
+        required: false
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/QueuedEvent"
+  /api/v1/provider/events/failed:
+    get:
+      tags:
+      - provider-webhook-controller
+      operationId: failed
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/FailedEventPage"
+  /api/v1/payouts/{id}:
+    get:
+      tags:
+      - payout-controller
+      operationId: get_1
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/PayoutResponse"
+  /api/v1/payments/{id}:
+    get:
+      tags:
+      - payment-controller
+      operationId: get_2
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/PaymentResponse"
+  /api/v1/payments/{id}/timeline:
+    get:
+      tags:
+      - payment-controller
+      operationId: timeline
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TimelineResponse"
+  /api/v1/metrics/summary:
+    get:
+      tags:
+      - operations-controller
+      operationId: summary
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: object
+                additionalProperties: {}
+  /api/v1/ledger/transactions/{id}:
+    get:
+      tags:
+      - ledger-controller
+      operationId: transaction
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/LedgerTransactionView"
+  /api/v1/health:
+    get:
+      tags:
+      - operations-controller
+      operationId: health
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/Report"
+  /api/v1/audit/events:
+    get:
+      tags:
+      - operations-controller
+      operationId: auditEvents
+      parameters:
+      - name: action
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: entityType
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: entityId
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: actorType
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: from
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: to
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: requestId
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: after
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: afterId
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int32
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AuditEventView"
+  /api/v1/audit/entities/{type}/{id}:
+    get:
+      tags:
+      - operations-controller
+      summary: "Audit trail for a single entity, by entity type and id"
+      operationId: entityTrail
+      parameters:
+      - name: type
+        in: path
+        description: "Entity type token. Case-insensitive: `payment` and `PAYMENT`\
+          \ are the same request. Any other value is a 404. Accepted: PAYMENT, PAYOUT_RECORD,\
+          \ PROVIDER, PROVIDER_EVENT, SETTLEMENT_RECORD, RECONCILIATION_BATCH, RECONCILIATION_RESULT,\
+          \ RECONCILIATION_CASE, IDEMPOTENCY_RECORD."
+        required: true
+        schema:
+          type: string
+      - name: id
+        in: path
+        description: "The entity's id, as stored in `audit_events.entity_id`"
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AuditEventView"
+  /api/v1/accounts:
+    get:
+      tags:
+      - ledger-controller
+      operationId: accounts
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AccountSummary"
+  /api/v1/accounts/{code}:
+    get:
+      tags:
+      - ledger-controller
+      operationId: account
+      parameters:
+      - name: code
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: currency
+        in: query
+        required: false
+        schema:
+          type: string
+          default: EGP
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/AccountBalance"
+  /api/v1/accounts/{code}/entries:
+    get:
+      tags:
+      - ledger-controller
+      operationId: entries
+      parameters:
+      - name: code
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int32
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/EntriesPage"
+components:
+  schemas:
+    WriteOffRequest:
+      type: object
+      properties:
+        resolutionNote:
+          type: string
+          maxLength: 2000
+          minLength: 20
+        resolutionAction:
+          type: string
+          enum:
+          - PROVIDER_ERROR_CONFIRMED
+          - INTERNAL_ERROR_CONFIRMED
+          - DUPLICATE_OF_CASE
+          - TIMING_DIFFERENCE
+          - OTHER
+      required:
+      - resolutionAction
+      - resolutionNote
+    ResolveRequest:
+      type: object
+      properties:
+        resolutionNote:
+          type: string
+          maxLength: 2000
+          minLength: 20
+        adjustmentLedgerTransactionId:
+          type: string
+      required:
+      - resolutionNote
+    InvestigateRequest:
+      type: object
+      properties:
+        assignedTo:
+          type: string
+          minLength: 1
+      required:
+      - assignedTo
+    CaseView:
+      type: object
+      properties:
+        id:
+          type: string
+        caseNumber:
+          type: string
+        paymentId:
+          type: string
+        providerTransactionId:
+          type: string
+        reason:
+          type: string
+        severity:
+          type: string
+        status:
+          type: string
+        occurrenceCount:
+          type: integer
+          format: int32
+        detectedAt:
+          type: string
+          format: date-time
+    CreateBatchRequest:
+      type: object
+      properties:
+        provider:
+          type: string
+          minLength: 1
+        windowStart:
+          type: string
+          format: date-time
+        windowEnd:
+          type: string
+          format: date-time
+        subjectMode:
+          type: string
+          enum:
+          - INTERNAL_LEDGER
+          - PROVIDER_ONLY
+          - BOTH
+        async:
+          type: boolean
+      required:
+      - provider
+      - windowEnd
+      - windowStart
+    BatchView:
+      type: object
+      properties:
+        id:
+          type: string
+        provider:
+          type: string
+        windowStart:
+          type: string
+          format: date-time
+        windowEnd:
+          type: string
+          format: date-time
+        subjectMode:
+          type: string
+        status:
+          type: string
+        totalSubjects:
+          type: integer
+          format: int32
+        processedSubjects:
+          type: integer
+          format: int32
+        totals:
+          $ref: "#/components/schemas/Summary"
+    Summary:
+      type: object
+      properties:
+        matched:
+          type: integer
+          format: int32
+        matchedNotSettled:
+          type: integer
+          format: int32
+        mismatched:
+          type: integer
+          format: int32
+        missingOnProvider:
+          type: integer
+          format: int32
+        missingInternal:
+          type: integer
+          format: int32
+        duplicates:
+          type: integer
+          format: int32
+        ambiguous:
+          type: integer
+          format: int32
+        grossDeltaMinor:
+          type: integer
+          format: int64
+        casesOpened:
+          type: integer
+          format: int32
+        casesReused:
+          type: integer
+          format: int32
+    SyncRequest:
+      type: object
+      properties:
+        windowStart:
+          type: string
+          format: date-time
+        windowEnd:
+          type: string
+          format: date-time
+      required:
+      - windowEnd
+      - windowStart
+    SyncResult:
+      type: object
+      properties:
+        fetched:
+          type: integer
+          format: int32
+        ingested:
+          type: integer
+          format: int32
+        alreadyKnown:
+          type: integer
+          format: int32
+        errors:
+          type: array
+          items:
+            type: string
+    RegisterPaymentRequest:
+      type: object
+      properties:
+        merchantReference:
+          type: string
+          minLength: 1
+        grossAmountMinor:
+          type: integer
+          format: int64
+          minimum: 1
+        currency:
+          type: string
+          minLength: 1
+        behaviour:
+          type: array
+          items:
+            type: string
+      required:
+      - currency
+      - grossAmountMinor
+      - merchantReference
+    RegisteredPayment:
+      type: object
+      properties:
+        externalTransactionId:
+          type: string
+        merchantReference:
+          type: string
+        grossAmountMinor:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        behaviours:
+          type: array
+          items:
+            type: string
+    ExecutePayoutRequest:
+      type: object
+      properties:
+        merchantReference:
+          type: string
+          minLength: 1
+        paymentIds:
+          type: array
+          items:
+            type: string
+          minItems: 1
+      required:
+      - merchantReference
+      - paymentIds
+    CreatePaymentRequest:
+      type: object
+      properties:
+        merchantReference:
+          type: string
+          minLength: 1
+          pattern: "^[A-Za-z0-9_-]{1,64}$"
+        description:
+          type: string
+          maxLength: 280
+          minLength: 0
+        amount:
+          $ref: "#/components/schemas/MoneyDto"
+        provider:
+          type: string
+        providerTransactionId:
+          type: string
+      required:
+      - amount
+      - merchantReference
+    MoneyDto:
+      type: object
+      properties:
+        amountMinor:
+          type: integer
+          format: int64
+        currency:
+          type: string
+    FailRequest:
+      type: object
+      properties:
+        failureCode:
+          type: string
+          maxLength: 32
+          minLength: 0
+        reason:
+          type: string
+          maxLength: 280
+          minLength: 0
+      required:
+      - failureCode
+    CaptureRequest:
+      type: object
+      properties:
+        expectedAmount:
+          $ref: "#/components/schemas/MoneyDto"
+    ReverseRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+    ResultView:
+      type: object
+      properties:
+        subjectKey:
+          type: string
+        outcome:
+          type: string
+        internalPaymentId:
+          type: string
+        providerTransactionId:
+          type: string
+        deltaMinor:
+          type: integer
+          format: int64
+        caseId:
+          type: string
+        differences:
+          type: string
+    QueuedEvent:
+      type: object
+      properties:
+        eventId:
+          type: string
+        type:
+          type: string
+        body:
+          type: string
+        occurredAt:
+          type: string
+          format: date-time
+        timestampOffsetSeconds:
+          type: integer
+          format: int32
+        signTimestamp:
+          type: string
+        signature:
+          type: string
+    FailedEvent:
+      type: object
+      properties:
+        eventId:
+          type: string
+        eventType:
+          type: string
+        attempts:
+          type: integer
+          format: int32
+        lastError:
+          type: string
+        status:
+          type: string
+    FailedEventPage:
+      type: object
+      properties:
+        count:
+          type: integer
+          format: int32
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/FailedEvent"
+    PayoutLineResponse:
+      type: object
+      properties:
+        paymentId:
+          type: string
+        netAmount:
+          $ref: "#/components/schemas/MoneyDto"
+        lineNo:
+          type: integer
+          format: int32
+    PayoutResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        merchantReference:
+          type: string
+        totalNet:
+          $ref: "#/components/schemas/MoneyDto"
+        lineCount:
+          type: integer
+          format: int32
+        status:
+          type: string
+        ledgerTransactionId:
+          type: string
+        executedAt:
+          type: string
+          format: date-time
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/PayoutLineResponse"
+    PageResponsePaymentResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PaymentResponse"
+        nextCursor:
+          type: string
+    PaymentResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        merchantReference:
+          type: string
+        description:
+          type: string
+        amount:
+          $ref: "#/components/schemas/MoneyDto"
+        platformFee:
+          $ref: "#/components/schemas/MoneyDto"
+        netAmount:
+          $ref: "#/components/schemas/MoneyDto"
+        state:
+          type: string
+        failureCode:
+          type: string
+        failureReason:
+          type: string
+        provider:
+          type: string
+        providerTransactionId:
+          type: string
+        capturedAt:
+          type: string
+          format: date-time
+        settledAt:
+          type: string
+          format: date-time
+        paidOutAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        version:
+          type: integer
+          format: int64
+    TimelineResponse:
+      type: object
+      properties:
+        occurredAt:
+          type: string
+          format: date-time
+        kind:
+          type: string
+        reference:
+          type: string
+        summary:
+          type: string
+        requestId:
+          type: string
+    LedgerEntryView:
+      type: object
+      properties:
+        id:
+          type: string
+        transactionId:
+          type: string
+        accountCode:
+          type: string
+        direction:
+          type: string
+        amountMinor:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        lineNo:
+          type: integer
+          format: int32
+        postedAt:
+          type: string
+          format: date-time
+    LedgerTransactionView:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        state:
+          type: string
+        currency:
+          type: string
+        sourceType:
+          type: string
+        sourceId:
+          type: string
+        description:
+          type: string
+        reversalOfTransactionId:
+          type: string
+        createdByActor:
+          type: string
+        postedAt:
+          type: string
+          format: date-time
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/LedgerEntryView"
+    Check:
+      type: object
+      properties:
+        name:
+          type: string
+        status:
+          type: string
+        detail:
+          type: string
+    Report:
+      type: object
+      properties:
+        status:
+          type: string
+        checks:
+          type: array
+          items:
+            $ref: "#/components/schemas/Check"
+        checkedAt:
+          type: string
+          format: date-time
+    AuditEventView:
+      type: object
+      properties:
+        id:
+          type: string
+        occurredAt:
+          type: string
+          format: date-time
+        actorType:
+          type: string
+        actorId:
+          type: string
+        action:
+          type: string
+        entityType:
+          type: string
+        entityId:
+          type: string
+        requestId:
+          type: string
+        metadata:
+          type: string
+    AccountSummary:
+      type: object
+      properties:
+        code:
+          type: string
+        name:
+          type: string
+        accountType:
+          type: string
+        normalSide:
+          type: string
+        state:
+          type: string
+    AccountBalance:
+      type: object
+      properties:
+        code:
+          type: string
+        name:
+          type: string
+        accountType:
+          type: string
+        currency:
+          type: string
+          enum:
+          - EGP
+          - USD
+          - EUR
+          - GBP
+        balance:
+          $ref: "#/components/schemas/MoneyDto"
+        recomputedBalance:
+          $ref: "#/components/schemas/MoneyDto"
+        entryCount:
+          type: integer
+          format: int64
+        recomputedEntryCount:
+          type: integer
+          format: int64
+        lastEntryAt:
+          type: string
+          format: date-time
+        verified:
+          type: boolean
+    EntriesPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/LedgerEntryView"
+        nextCursor:
+          type: string
+  securitySchemes:
+    bearerAuth:
+      type: http
+      description: |
+        A static operator or admin bearer token. Admin implies
+        operator. Not a production identity design; see the
+        authentication section of the README for what a real
+        deployment puts in front of this instead.
+      scheme: bearer

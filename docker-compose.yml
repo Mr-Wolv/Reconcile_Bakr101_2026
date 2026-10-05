@@ -1,0 +1,90 @@
+# Reconcile - local stack.
+#
+#   docker compose up --build          start the stack
+#   docker compose run --rm build      run the full verification (unit + integration tests)
+#
+# The `build` service exists so the ONLY way to compile is through the Java 25 builder,
+# matching decision D11. There is deliberately no local-JDK path.
+
+services:
+  postgres:
+    image: postgres:18.6
+    environment:
+      POSTGRES_DB: reconcile
+      POSTGRES_USER: reconcile
+      POSTGRES_PASSWORD: reconcile
+    # Loopback, not 0.0.0.0. Docker's default publishes on every interface, which on a laptop
+    # connected to a cafe or office network means anyone on that network can reach a database
+    # whose password is the word "reconcile" - and once this repository is public, that password
+    # and this port are both published. Bind to 0.0.0.0 deliberately if you need to, e.g.
+    #   RECONCILE_DB_BIND=0.0.0.0 docker compose up
+    ports:
+      - "${RECONCILE_DB_BIND:-127.0.0.1}:55433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reconcile -d reconcile"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      # PostgreSQL 18 moved its data directory. A mount at /var/lib/postgresql/data lands on a
+      # path the image no longer uses, so the server initialises a fresh cluster inside the image
+      # and the container exits on start-up with a message about pg_upgrade. The mount point below
+      # is the one the 18+ image documents; with it, `docker compose up` works and restarts keep
+      # their data.
+      - pgdata:/var/lib/postgresql
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/reconcile
+      SPRING_DATASOURCE_USERNAME: reconcile
+      SPRING_DATASOURCE_PASSWORD: reconcile
+      RECONCILE_OPERATOR_TOKEN: ${RECONCILE_OPERATOR_TOKEN:-dev-operator-token}
+      RECONCILE_ADMIN_TOKEN: ${RECONCILE_ADMIN_TOKEN:-dev-admin-token}
+      RECONCILE_PSP_WEBHOOK_SECRET: ${RECONCILE_PSP_WEBHOOK_SECRET:-dev-webhook-secret}
+      SPRING_PROFILES_ACTIVE: dev
+    # Loopback for the same reason as the database above, and the sharper one: the API's
+    # authentication is two static tokens whose defaults are committed to this repository. Once
+    # it is public, an API published to the LAN is an API anyone on that LAN can drive.
+    ports:
+      - "${RECONCILE_APP_BIND:-127.0.0.1}:8080:8080"
+
+  # The verification entry point. Runs compile + all tests against a throwaway PostgreSQL.
+  build:
+    image: maven:3.9-eclipse-temurin-25
+    working_dir: /build
+    volumes:
+      - .:/build
+      - maven-cache:/root/.m2
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/reconcile_test
+      SPRING_DATASOURCE_USERNAME: reconcile
+      SPRING_DATASOURCE_PASSWORD: reconcile
+      RECONCILE_OPERATOR_TOKEN: test-operator-token
+      RECONCILE_ADMIN_TOKEN: test-admin-token
+      RECONCILE_PSP_WEBHOOK_SECRET: test-webhook-secret
+      SPRING_PROFILES_ACTIVE: test
+      # Ryuk (Testcontainers' orphan reaper) publishes its port on the Docker host, which a
+      # container on the bridge network cannot reach on Docker Desktop. Disabling it here is safe:
+      # the JUnit extension stops containers when the JVM exits. CI runs on the host, where Ryuk
+      # works and is deliberately left enabled.
+      TESTCONTAINERS_RYUK_DISABLED: "true"
+      # Testcontainers otherwise guesses the Docker host as 172.17.0.1. On Docker Desktop that
+      # address does not carry the EPHEMERAL host ports it allocates (verified: a container-bound
+      # port is refused there, while an explicitly fixed one works), so the integration tests would
+      # fail with "Connection refused" while the database was up and healthy. host.docker.internal
+      # is the address Docker Desktop actually publishes to.
+      TESTCONTAINERS_HOST_OVERRIDE: host.docker.internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["mvn", "-B", "verify"]
+
+volumes:
+  pgdata:
+  maven-cache:

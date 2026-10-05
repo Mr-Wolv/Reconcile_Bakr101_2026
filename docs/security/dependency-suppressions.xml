@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Suppressions for the scheduled dependency scan.
+
+  Empty on purpose, and that is the important part: every entry here is a statement that a
+  known vulnerability does not apply, and an unexplained entry is indistinguishable from
+  somebody silencing an alert they did not want to read. Each suppression must carry a
+  `reason` and a `until` date; the `until` is what forces the decision to be revisited
+  instead of becoming permanent.
+
+  The scan fails the build at CVSS >= 7, so anything suppressed below that was never going to
+  fail the build anyway - suppressing those would be decoration.
+
+  When a scan reports something real, prefer fixing the dependency over suppressing the
+  finding. A suppression is for "this does not apply to us, and here is why", never for
+  "we would like to ship today".
+-->
+<suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.3.xsd">
+</suppressions>

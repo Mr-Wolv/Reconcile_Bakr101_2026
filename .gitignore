@@ -22,3 +22,15 @@
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
 replay_pid*
+
+# Maven build output, including surefire/failsafe reports
+target/
+
+# IDE and agent directories
+.idea/
+.vscode/
+.freebuff/
+
+# Python bytecode caches; scripts/*.py are build helpers
+__pycache__/
+*.pyc

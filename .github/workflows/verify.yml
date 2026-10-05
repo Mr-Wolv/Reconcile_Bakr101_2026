@@ -1,0 +1,186 @@
+name: verify
+
+# The build runs only in Docker on Java 25 (decision D11), so this workflow is a thin wrapper
+# around the same container command a developer runs locally. A green run here means the same
+# command a developer typed produced the same result.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # The ordering soak needs a trigger of its own. It runs the same suite with a rotating seed so
+  # the randomised leg keeps meeting orderings the gate has not seen, without making the gate
+  # itself unrepeatable. Off-round minutes, for the same reason as every other schedule here.
+  schedule:
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      # Before the build, not after: a workflow with an unparseable `run:` block would otherwise
+      # only be discovered on the runner, which is the one place it cannot be debugged.
+      - name: Check the workflow definitions
+        run: python3 -m pip install --quiet pyyaml && python3 scripts/check_workflows.py
+
+      - name: Run the full verification (unit + integration)
+        run: |
+          # The ordering seed is the commit SHA, so this commit always exercises the same event
+          # orderings and the next one exercises something new. Reproducible per commit, never
+          # novel per run - the opposite trade would make a red build impossible to replay.
+          # EventOrderingIT hashes this rather than parsing it: a SHA like "f969294" is not a
+          # decimal long, and a parse failure there would fall back to the clock silently.
+          docker run --rm \
+            --mount type=bind,src="$PWD",dst=/build \
+            -w /build \
+            -v reconcile-m2:/root/.m2 \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -e TESTCONTAINERS_RYUK_DISABLED=true \
+            maven:3.9-eclipse-temurin-25 \
+            mvn -B verify "-Dreconcile.ordering.seed=${{ github.sha }}"
+
+      - name: Explain a testcontainers connection failure
+        if: failure()
+        run: |
+          echo "::error::If the failures are 'Connection refused' against a mapped"
+          echo "::error::Testcontainers port, the Docker host address is the cause."
+          echo "::error::Re-run with -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal"
+
+      # Parsed from the XML reports rather than grepped. The previous version matched on
+      # `failures="N"` attributes, but failsafe-summary.xml carries `<failures>N</failures>`
+      # elements - so that check could never match and would have passed on a red suite.
+      # A check that cannot fail is worse than no check, so this one parses the real format and
+      # also asserts that each suite ran a non-zero number of tests, which catches a silently
+      # skipped suite.
+      - name: Assert both suites actually ran and passed
+        if: always()
+        run: python3 scripts/check_suites.py
+
+      # D-01. The README and the test matrix quote exact figures. They were wrong, and
+      # hand-maintained counts stay wrong because nothing forces anyone to update them.
+      # inventory.py recomputes them from the tree and from the reports just written, parses them
+      # back out of the documents, and fails on any disagreement.
+      #
+      # This step was MISSING here while present in scripts/verify.sh - the local gate was stricter
+      # than CI, which is backwards: the counts are the exact numbers a handoff document quotes, and
+      # CI is where they were drifting unchecked. It also has its own failure mode worth naming:
+      # `_check` used to be handed the file NAME where it expected the file TEXT, so it regexed the
+      # nine characters of "README.md" and could never pass. A gate wired in but incapable of
+      # passing is worse than an absent one, because it is read as coverage.
+      - name: Assert the documented inventory matches the tree
+        if: always()
+        run: python3 scripts/inventory.py --check
+
+      # The parser that replaced the wrong-key-path heredoc (F-11) is a checked-in script, so it is
+      # testable. Its fixtures run here rather than only on the security workflow's schedule, for
+      # the same reason: a parser exercised only by a scheduled job is a parser nobody can run.
+      - name: Test the gate parsers against known inputs
+        if: always()
+        run: python3 scripts/test_dependency_check_summary.py
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: test-reports
+          path: |
+            target/surefire-reports/
+            target/failsafe-reports/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # The suite proves the code; this job proves the image. They disagree, and they have disagreed
+  # in both directions: defects 12, 16 and 18 were invisible to `mvn verify` and obvious against a
+  # running container, and defect 19 appeared only on the *second* probe run, after a restart.
+  # Neither check subsumes the other, so both gate.
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Build and start the stack
+        run: docker compose up -d --build app
+
+      # The app is not ready when compose returns, and a probe against a starting container
+      # reports failures that say nothing about the code.
+      - name: Wait for the app to report healthy
+        run: |
+          for i in $(seq 1 60); do
+            state=$(docker inspect --format '{{.State.Health.Status}}' \
+              "$(docker compose ps -q app)" 2>/dev/null || echo missing)
+            if [ "$state" = "healthy" ]; then
+              echo "healthy after $i checks"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::the app never became healthy"
+          docker compose logs --no-color app | tail -80
+          exit 1
+
+      # Invoked through `bash` rather than as `./scripts/probe.sh`: a Windows checkout records
+      # mode 100644 no matter what chmod says locally, so the executable bit cannot be relied on
+      # until the file is committed from a POSIX environment.
+      - name: Probe the running image over HTTP
+        run: bash scripts/probe.sh
+
+      # Unconditional on failure: when the image is what is broken the probe output is the only
+      # diagnosis available, and the verify job above already established the code is fine.
+      - name: Show container logs
+        if: failure()
+        run: docker compose logs --no-color app | tail -120
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
+
+  # The exhaustive legs of EventOrderingIT — all 24 orderings of a four-event lifecycle, all 6 of
+  # a webhook-only one, all 6 of a refund racing its settlement — are what actually pin defect 22.
+  # The randomised leg is insurance against shapes enumeration cannot reach, and this job is how
+  # that insurance is exercised on a schedule rather than by chance on a push.
+  #
+  # The seed is the day of the year, so each nightly run explores orderings yesterday's did not,
+  # and anyone can replay any of them from the log. Non-gating: it is a search, and a search that
+  # breaks the build on its first finding is a search that gets switched off.
+  soak:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Soak the randomised ordering leg
+        run: |
+          seed="soak-$(date -u +%Y-%m-%d)"
+          echo "seed: $seed"
+          echo "## Ordering soak — $seed" >> "$GITHUB_STEP_SUMMARY"
+          docker run --rm \
+            --mount type=bind,src="$PWD",dst=/build \
+            -w /build \
+            -v reconcile-m2:/root/.m2 \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -e TESTCONTAINERS_RYUK_DISABLED=true \
+            maven:3.9-eclipse-temurin-25 \
+            mvn -B verify -Dit.test='EventOrderingIT' -Dtest='none' \
+              -Dsurefire.failIfNoSpecifiedTests=false \
+              "-Dreconcile.ordering.seed=$seed"
+
+      - name: How to replay a soak failure
+        if: failure()
+        run: |
+          echo "::error::the randomised ordering leg found something; the seed is in the step log"
+          echo "::error::and is derived from the UTC date. Replay it locally with:"
+          echo "::error::  ./scripts/verify.sh -Dit.test='EventOrderingIT' -Dtest='none' \\"
+          echo "::error::    -Dsurefire.failIfNoSpecifiedTests=false \\"
+          echo "::error::    -Dreconcile.ordering.seed=soak-YYYY-MM-DD"
