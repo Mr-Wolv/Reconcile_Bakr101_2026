@@ -12,6 +12,10 @@ on:
   # itself unrepeatable. Off-round minutes, for the same reason as every other schedule here.
   schedule:
     - cron: "41 3 * * *"
+  # Dispatch too, so the soak is not reachable only by waiting for 03:41 UTC. A job whose sole
+  # trigger is a clock cannot be exercised on demand, which is indistinguishable from a job that
+  # has stopped working - and until it was dispatchable, that was this one's state: skipped on
+  # every push and pull request, never once observed running.
   workflow_dispatch:
 
 permissions:
@@ -154,8 +158,8 @@ jobs:
   soak:
     # The reason is in the display name on purpose: the job is skipped on every push and pull
     # request, and a greyed-out row with no explanation reads as something that failed to start.
-    name: Ordering soak (nightly schedule only)
-    if: github.event_name == 'schedule'
+    name: Ordering soak (nightly schedule, or a manual dispatch)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     continue-on-error: true
