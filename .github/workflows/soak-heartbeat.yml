@@ -1,0 +1,42 @@
+name: soak heartbeat
+
+# A GitHub Actions schedule is a request, not a guarantee: under load GitHub
+# can delay or silently drop a scheduled run, and nothing tells the repository
+# when that has happened. The ordering soak runs only on the verify workflow's
+# nightly schedule (03:41 UTC) and on its manual dispatch, so if that schedule
+# ever stops firing, the one leg a push cannot reproduce quietly stops being
+# exercised — and because the soak now gates, its absence would be invisible
+# in exactly the way a green build is invisible. This workflow is the
+# notification for that case: it runs after the soak's own schedule and fails
+# when no successful soak-triggered run of verify.yml exists in the last
+# 48 hours. One dropped night is absorbed (the previous night's success is
+# then about 25 hours old); two consecutive dropped nights are not.
+on:
+  # 05:17 UTC — 96 minutes after the soak's 03:41, so a merely delayed nightly
+  # has usually landed before this checks. Off-round minutes, for the same
+  # reason as every other schedule here.
+  schedule:
+    - cron: "17 5 * * *"
+  # Dispatchable, because a job whose sole trigger is a clock cannot be
+  # exercised on demand — which is indistinguishable from a job that has
+  # stopped working. That was the soak's own state until 2026-10-06.
+  workflow_dispatch:
+
+# actions: read lists the verify workflow's runs; contents: read checks out
+# the script. Declared rather than inherited, as every workflow here declares
+# what it needs.
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Confirm the soak ran within the last 48 hours
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/soak_heartbeat.py
