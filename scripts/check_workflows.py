@@ -3,11 +3,13 @@
 
 WHY THIS EXISTS
 ---------------
-Nothing in this repository can execute a GitHub Actions workflow, so a workflow is
-the only kind of file here with no execution evidence at all. `docs/spec/08 §7a`
-says so out loud rather than implying the jobs have run. This script is the
-strongest check that is actually available offline, and it is deliberately
-narrow about what it claims:
+A workflow is the one kind of file here whose execution happens somewhere this
+repository cannot reach: the runner. Until 2026-10-06 that meant no workflow had
+ever run at all; `verify` and `security` run now, and their results are recorded
+in CI_EXECUTION_REPORT.md rather than inferred from a parse. What no run replaces
+is the offline question this script answers — is this file well-formed *before* it
+is pushed, where a YAML that parses can still carry a shell script that does not.
+It is deliberately narrow about what it claims:
 
   * every workflow file is valid YAML
   * every workflow declares `on:` (triggers) and `permissions:` — a workflow that
@@ -142,7 +144,10 @@ def main():
 
     print(f"\n{len(files)} workflow(s) parse, name their triggers and permissions, and every "
           f"run block is valid bash.")
-    print("That is the whole claim. None of these jobs has ever been executed.")
+    print("That is the whole claim, and it is about these files rather than about a run: nothing "
+          "here can see a runner.")
+    print("Whether the jobs actually succeed is in the Actions history and in "
+          "CI_EXECUTION_REPORT.md.")
     return 0
 
 

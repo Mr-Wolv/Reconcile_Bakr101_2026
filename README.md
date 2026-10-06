@@ -390,13 +390,17 @@ no information about how much was guessed. Every query is parameterised; there i
 string-building anywhere, in main code or tests. A rejected webhook records an outcome and a reason,
 never the signature or the token.
 
-**What has not been done.** Static analysis and a penetration scan are now *configured* —
-[`.github/workflows/security.yml`](.github/workflows/security.yml) runs Semgrep over `p/java` on
-every push, GitHub's dependency review on every pull request, and scheduled OSSF Scorecard and OWASP
-ZAP baseline scans against the running image — and **none has ever run**, because nothing in this
-repository can execute a GitHub Actions workflow. The same is true of every other workflow here: they
-parse, and no runner has ever executed them. Treat the first run of each as a measurement, not as a
-gate that is expected to be green.
+**What the scans have done, and what green does not mean.** Static analysis and a penetration scan
+have now executed on hosted runners. [`security.yml`](.github/workflows/security.yml) runs Semgrep
+over `p/java` on every push, GitHub's dependency review on every pull request, and scheduled OSSF
+Scorecard and OWASP ZAP baseline scans against the running image. Semgrep loaded 60 rules and found
+no `ERROR`-severity finding; ZAP completed against the running image and recorded one alert — its
+root answers `401` to an unauthenticated spider, which is correct behaviour reported as a finding —
+and uploaded its report. Green here is a measurement and not an assurance: ZAP and Scorecard stay
+advisory by decision. Two workflows have still never run, and both are facts about their triggers
+rather than about this code: `release.yml` needs a `v*` tag that has not been pushed, and
+`dependency-scan.yml` needs an `NVD_API_KEY`. The runs themselves, including the two defects the
+first execution exposed, are recorded in [`CI_EXECUTION_REPORT.md`](CI_EXECUTION_REPORT.md).
 
 The dependency scan *does* run somewhere real: the OSV check now fires on every push to `main` and
 twice a week, gated on [`docs/security/osv-baseline.json`](docs/security/osv-baseline.json) so it
@@ -411,9 +415,10 @@ for itself. Its workflow is written and corrected; the key is not available.
 
 **What comes next is written down, not implied.** [`docs/roadmap.md`](docs/roadmap.md) scopes the
 deferred work — the NVD scan, multi-provider, refund modelling on reconciliation's expected side,
-SHA-pinned actions, an authenticated ZAP scan — each with its blocker, its cost, and what it would
-prove. Three of the five are blocked on something outside the code: a key, a sandbox account, a
-network call.
+and an authenticated ZAP scan — each with its blocker, its cost, and what it would prove. Three of
+the four are blocked on something outside the code: a key, a sandbox account, a network call. It
+also records the one item that is no longer deferred: every `uses:` is pinned to a full commit SHA,
+and `scripts/pin_actions.py --check` resolves all six of them.
 
 ## The five properties
 

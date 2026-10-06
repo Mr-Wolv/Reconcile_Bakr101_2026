@@ -150,11 +150,21 @@ jobs:
   # The exhaustive legs of EventOrderingIT — all 24 orderings of a four-event lifecycle, all 6 of
   # a webhook-only one, all 6 of a refund racing its settlement — are what actually pin defect 22.
   # The randomised leg is insurance against shapes enumeration cannot reach, and this job is how
-  # that insurance is exercised on a schedule rather than by chance on a push.
+  # that insurance is exercised on a schedule and on demand rather than by chance on a push.
   #
-  # The seed is the day of the year, so each nightly run explores orderings yesterday's did not,
-  # and anyone can replay any of them from the log. Non-gating: it is a search, and a search that
-  # breaks the build on its first finding is a search that gets switched off.
+  # The seed is the UTC date and it is printed before the run starts, so each night explores
+  # orderings the previous one did not and any failure replays exactly as `soak-YYYY-MM-DD`. That
+  # is what changed this job's gating decision. It was `continue-on-error: true`, on the argument
+  # that "a search that breaks the build on its first finding is a search that gets switched off"
+  # - an argument about findings nobody can reproduce. EventOrderingIT does not sample orderings:
+  # it writes the one under test into `next_attempt_at` and releases its threads on a barrier,
+  # with no sleep and no polling, so the leg is deterministic for a given seed and a failure is a
+  # defect rather than a flake.
+  #
+  # It is allowed to mark the run red because of its trigger, not despite it: this job runs on the
+  # nightly schedule and on a manual dispatch, never on a push or a pull request, so gating it
+  # cannot block anyone's merge. Not gating it meant a red job sitting inside a green run, which is
+  # the one shape of failure nobody reads - ZAP was in exactly that state until this pass.
   soak:
     # The reason is in the display name on purpose: the job is skipped on every push and pull
     # request, and a greyed-out row with no explanation reads as something that failed to start.
@@ -162,7 +172,6 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    continue-on-error: true
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4

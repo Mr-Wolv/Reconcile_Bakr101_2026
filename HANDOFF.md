@@ -43,6 +43,9 @@ Measured, not asserted. Every figure below is recomputed from the tree or the Ma
   204 integration against real PostgreSQL 18.6 (`mvn verify`)
 ```
 
+- **CI executes the same gate and is green.** `verify` and `security` pass on hosted runners at
+  `d1e9af8`, reproducing the counts above on a machine that is not a developer's; the nightly `soak`
+  job exercises the randomised ordering leg on demand as well as on its schedule.
 - **19 of 19 release gates exit 0** — build, both suites, four static gates, migration application,
   SQL invariant probe, and every live probe.
 - **Financial invariants M1–M8 are proven with no application in the path**, each refusal attributed
@@ -59,9 +62,14 @@ Measured, not asserted. Every figure below is recomputed from the tree or the Ma
 
 Stated plainly, because the absence of these is not a claim that they are satisfied.
 
-1. **Hosted CI execution is not verified.** CI *logic* is statically verified (triggers, SHA-pinned
-   actions, failure propagation, advisory jobs, secret scoping, permissions — 9/9). No workflow has
-   ever been executed by a runner. **This is not a claim that CI is green.**
+1. **Hosted CI execution is verified, and it is green.** `verify` and `security` both pass on `main`
+   at `d1e9af8`: unit 150/150, integration 204 with one deliberate skip, both suites asserted from
+   the XML reports rather than from the log, the documented inventory reconciled against the tree,
+   and the four security jobs green. The execution was worth more than the nine static checks that
+   preceded it — it found a Semgrep ruleset retired upstream and a ZAP job that could not write its
+   report, neither of which any offline check can see ([`CI_EXECUTION_REPORT.md`](CI_EXECUTION_REPORT.md)).
+   What remains unexecuted is bounded and trigger-explainable: `release.yml` (needs a `v*` tag) and
+   `dependency-scan.yml` (needs `NVD_API_KEY`).
 2. **`dependency-scan.yml` cannot complete without `NVD_API_KEY`** — a cold NVD sync is ~250k
    requests. The OSV and GitHub Advisory scans are keyless and do gate every push.
 3. **Concurrency evidence is strong but sampled**, not exhaustive: 24-way and 16-way over HTTP, plus
@@ -114,6 +122,7 @@ documentation, and fails on any disagreement — including an arithmetic check t
 | | |
 | --- | --- |
 | [`README.md`](README.md) | Status, scope, and the defect history — every defect found and how |
+| [`CI_EXECUTION_REPORT.md`](CI_EXECUTION_REPORT.md) | The first hosted CI execution: what it found, and why the soak now gates |
 | [`docs/spec/`](docs/spec/00-overview.md) | Nine specifications: the contract the code is written against |
 | [`docs/adr/`](docs/adr/README.md) | Five architecture decision records, with why |
 | [`RELEASE_FREEZE_REPORT.md](RELEASE_FREEZE_REPORT.md) | The freeze decision and the final gate table |

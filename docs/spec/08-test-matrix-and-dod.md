@@ -241,14 +241,16 @@ claim is false, and the test says so.
 
 ## 6. CI pipeline
 
-Four workflows. **None of them has ever executed** — see §7a — so what follows describes what each
-one would do, and `scripts/check_workflows.py` is the only claim that is actually verifiable here.
+Four workflows. Two of them — `verify` and `security` — have executed on a hosted runner and are
+green on `main` as of `d1e9af8`; `release` and `dependency-scan` have not, for reasons that are
+about their triggers rather than about the repository (see §7a). What follows describes what each
+one does, and `scripts/check_workflows.py` remains the one check here that does not need a runner.
 
 | Workflow | Trigger | What it gates |
 | --- | --- | --- |
-| `verify.yml` | push to `main`, any pull request, manual | The full gate: the same `docker run … mvn verify` a developer runs locally, then `scripts/check_suites.py` parsed from the XML reports, then a separate `probe` job that builds the image with compose and runs `scripts/probe.sh` against it |
+| `verify.yml` | push to `main`, any pull request, nightly at 03:41 UTC, manual | The full gate: the same `docker run … mvn verify` a developer runs locally, then `scripts/check_suites.py` parsed from the XML reports, then a separate `probe` job that builds the image with compose and runs `scripts/probe.sh` against it. A third `soak` job runs `EventOrderingIT`'s randomised leg, seeded from the UTC date, and gates — it never runs on a push, so it cannot block a merge |
 | `release.yml` | a `v*` tag | Re-runs the whole gate plus the image build and the probe against the tagged commit, so a tag cannot point at a tree that does not pass |
-| `security.yml` | push to `main`, twice weekly, manual | OSV dependency scan (gated on the triaged baseline), Semgrep SAST at `ERROR` severity, and a non-gating ZAP baseline scan whose report is uploaded |
+| `security.yml` | push to `main`, any pull request, twice weekly (Mon/Thu 04:23 UTC), manual | OSV dependency scan (gated on the triaged baseline), Semgrep SAST over `p/java` at `ERROR` severity — which also fails when the scan loaded zero rules, because a scan that did not run and a clean scan both report nothing — GitHub's dependency review on pull requests, and a non-gating ZAP baseline scan whose report is uploaded |
 | `dependency-scan.yml` | weekly, manual | OWASP dependency-check against the NVD. Scheduled and manual only: a cold NVD download is tens of minutes, and gating on it would fail pushes for reasons unrelated to the change |
 
 Three properties worth stating, because most portfolios quietly lack them:
@@ -411,19 +413,28 @@ and the roadmap is the answer to it.
   corrected, and [`docs/roadmap.md §1`](../roadmap.md) has the arithmetic. One finding applied
   (CVE-2026-65182, fixed by pinning Tomcat to 11.0.26); the rest are recorded as
   unreachable-by-configuration.
-- GitHub Actions has never executed. Every workflow — `verify`, `release`, `dependency-scan` and the
-  new `security` — parses and nothing has ever run it: the runner, the concurrency groups, the
-  artifact upload and the Semgrep, Scorecard and ZAP steps are all unexercised. Actions are referenced
-  by tag rather than by commit SHA; an invented SHA is a workflow that fails at its first step, and
-  pinning them is a one-pass job from a machine with network access
-  ([`docs/roadmap.md §4`](../roadmap.md)).
-- Static analysis and a penetration test are now *configured* (Semgrep over `p/java`, gating at
-  `ERROR` severity; OWASP ZAP baseline scan against the running image, scheduled and non-gating with
-  the report uploaded; OSSF Scorecard for supply-chain posture) and none has ever run. ZAP's first
-  run on this application will report findings nobody has triaged, which is why it does not gate;
-  that is a decision about sequencing, not evidence that the application passes it. The baseline scan
-  is also anonymous, so most of what it finds is "this endpoint requires authentication" — correct
-  behaviour reported as a finding. An authenticated scan is [`docs/roadmap.md §5`](../roadmap.md).
+- **GitHub Actions has now executed, and the first execution found what no offline check could.**
+  `verify` and `security` are green on `main` as of `d1e9af8`. Two workflows have still never run,
+  and both are facts about their triggers rather than gaps in the repository: `release.yml` fires on
+  a `v*` tag that has not been pushed, and `dependency-scan.yml` needs an `NVD_API_KEY`. The runner,
+  the concurrency groups, the health wait and the artifact uploads are therefore exercised now —
+  `release.yml`'s are not. Actions are pinned to full commit SHAs and
+  `scripts/pin_actions.py --check` verifies that each one still resolves, so the earlier caveat —
+  that an invented SHA is a workflow that fails at its first step — no longer applies
+  ([`docs/roadmap.md §4`](../roadmap.md)). What the first run exposed was invisible to every static
+  check in this repository: Semgrep's `p/spring` ruleset is retired upstream, where a 404 loads zero
+  rules and exits 7, and the ZAP job could not write its report into a directory owned by the
+  runner. Both are fixed, and [`CI_EXECUTION_REPORT.md`](../../CI_EXECUTION_REPORT.md) records the
+  runs that prove it.
+- Static analysis and a penetration scan have now run (Semgrep over `p/java`, gating at `ERROR`
+  severity; OWASP ZAP baseline scan against the running image, non-gating with the report uploaded;
+  OSSF Scorecard for supply-chain posture). Semgrep loaded **60 rules and found 0 `ERROR`-severity
+  findings**; ZAP completed with **one** alert — its root answers `401` to an unauthenticated
+  spider, which is correct behaviour reported as a finding, and the reason ZAP's output is not
+  evidence that the application passes it. Both stay advisory deliberately: ZAP because nobody has
+  triaged that alert, Scorecard because it reports on the repository rather than on the code and
+  starts red on any new repository. An authenticated ZAP scan is
+  [`docs/roadmap.md §5`](../roadmap.md).
 - One provider. Multi-provider routing is deliberately not implemented, and the webhook's pinned
   provider constant is a documented decision rather than an oversight — a provider cannot come from
   the request body, because a holder of one PSP's secret could then file events under another's

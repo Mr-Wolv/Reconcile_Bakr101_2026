@@ -41,11 +41,15 @@ name: security
 #
 # WHAT IT DOES NOT DO
 # -------------------
-# It does not claim these have been executed. Nothing in this repository can execute a GitHub
-# Actions workflow, so every job here is unrun code until a runner runs it. That is stated in
-# README.md's limitations rather than glossed over, and it is the reason the gates below are set
-# conservatively: the first execution of a job should tell you something useful, not block a
-# release over an untriaged finding.
+# It does not claim the application is secure. Every job here has now executed on a hosted runner,
+# and green is a measurement rather than an assurance: Semgrep reports 0 ERROR-severity findings
+# under one pinned ruleset, ZAP reports one untriaged warning against an unauthenticated scan, and
+# Scorecard reports on the repository. The first execution found two things no offline check could
+# - the Semgrep ruleset below is retired upstream, and the ZAP job could not write its report into
+# a directory owned by the runner - and CI_EXECUTION_REPORT.md records both. What remains true of
+# this file is narrower and worth stating: `score` and `zap` are advisory by decision, so a red job
+# there is a to-do list rather than a blocked release, and the gates below are set conservatively
+# so that an execution tells a reader something useful rather than failing on an untriaged alert.
 #
 # Actions are pinned to commit SHAs, and scripts/pin_actions.py --check enforces it (D-01: this
 # comment previously said they were "referenced by tag", which had stopped being true). A tag can

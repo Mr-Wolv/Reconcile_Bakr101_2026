@@ -9,6 +9,51 @@ Numbers in this file are measured by a build, never estimated. The suite that pr
 
 ---
 
+## [Unreleased] — CI executed
+
+Hosted CI ran for the first time, and this is what it forced. Nothing about the application
+changed; what changed is that the pipeline has execution evidence instead of only a static parse —
+and the first execution found five defects that no offline check could see.
+
+### Fixed
+
+- **Semgrep failed on every run, and would have passed the gate it was written to be.** The workflow
+  ran `--config p/spring`, and Semgrep retired the language-specific Spring rulesets upstream: the
+  config answers 404, loads **zero rules** and exits 7. It was moved to `p/java` and given a
+  non-vacuity check, because "zero findings" from a scan that loaded no rules is not a clean result.
+- **The severity gate could not fail.** It read `result.level`, which Semgrep never writes on a
+  finding — severity lives on the rule's `defaultConfiguration.level`. A scan with 51 `ERROR`
+  findings passed it. It now resolves each result's severity through its rule id.
+- **ZAP failed while finding nothing, and uploaded nothing.** Three separate defects: the scan could
+  not write its report into a bind mount owned by the runner (`Permission denied: '/zap/wrk/zap.yaml'`),
+  the workflow looked for the report in the workspace root while the image writes it inside the
+  mounted directory, and the summary step parsed a JSON shape ZAP does not emit. The scan's exit
+  codes were also read off the script rather than guessed: 1 is a FAIL alert, 2 a WARN alert, 3
+  nothing scanned.
+- **`WebhookWithoutDatabaseIT` failed deterministically.** Restoring `CONNECT` restores the
+  privilege, not Hikari's pool: connections terminated by the outage were still in the idle set, and
+  the immediate redelivery was handed one. The test now waits for the application to reach the
+  database before redelivering. Every assertion is unchanged.
+- **`dependency-review-action` was red on every pull request**, because the repository's dependency
+  graph was disabled and no workflow can enable it. The job now probes the endpoint the action
+  itself needs and either runs the review or prints the reason and the one-line fix.
+
+### Changed
+
+- **The ordering soak gates, and can be dispatched.** It was reachable only at 03:41 UTC and ran
+  with `continue-on-error`, so the one leg a push cannot reproduce was also the one nobody could
+  run and the one whose failure nobody would see. It now runs on `workflow_dispatch` as well as on
+  its schedule, and it marks the run red. Its seed is the UTC date and is printed in the log, so a
+  failure replays exactly, and it never runs on a push, so gating it cannot block a merge.
+- **The documentation no longer claims Actions has never executed.** `verify` and `security` are
+  green on `main`; `release.yml` and `dependency-scan.yml` still have not run, and the text now says
+  so for the reason that is actually true — a missing `v*` tag and a missing `NVD_API_KEY` — rather
+  than as a general statement about the repository.
+
+Runs, measurements and the full account: [`CI_EXECUTION_REPORT.md`](CI_EXECUTION_REPORT.md).
+
+---
+
 ## [1.0.0] — 2026-10-04
 
 First stable release. The money path — payments, the ledger, idempotency, signed webhook
@@ -166,15 +211,18 @@ These are deliberate and documented rather than fixed:
   "minutes" and allowed 45 of them, which a cold sync of NVD API 2.0 could never satisfy; the
   timeout is now 300 minutes and the NVD store is cached. Scoping is in
   [`docs/roadmap.md §1`](docs/roadmap.md).
-- **GitHub Actions has never executed.** Every workflow parses; none has ever run. The runner,
-  concurrency groups, artifact upload, and the Semgrep, Scorecard and ZAP steps are all unexercised,
-  and actions are referenced by tag rather than by commit SHA because an invented SHA is a workflow
-  that fails at its first step. Treat the first run of each as a measurement.
-- **SAST and a penetration scan are configured and have never run.** Semgrep over `p/java` gates
-  on `ERROR` severity; GitHub dependency review gates on high; Scorecard and ZAP baseline scanning
-  are non-gating and upload their reports. The first ZAP run will report findings nobody has
-  triaged, which is why it does not gate — a decision about sequencing, not evidence that the
-  application passes it.
+- **GitHub Actions had not executed when these release notes were written.** Every workflow parsed;
+  none had run, so the runner, concurrency groups, artifact upload, and the Semgrep, Scorecard and
+  ZAP steps were unexercised. *(Corrected at freeze: they have since run and are green — see
+  [Unreleased] above. The "referenced by tag" clause in this bullet was wrong when written as well
+  as stale now: every `uses:` is pinned to a full commit SHA, and always was.)*
+- **SAST and a penetration scan had not run when these release notes were written.** Semgrep over
+  `p/java` gates on `ERROR` severity; GitHub dependency review gates on high; Scorecard and ZAP
+  baseline scanning are non-gating and upload their reports. *(Corrected at freeze: all four have now
+  executed. Semgrep loaded 60 rules and found 0 `ERROR`-severity findings, and ZAP recorded one alert
+  — its root answering `401` to an unauthenticated spider. Neither result is evidence that the
+  application passes: the review, Scorecard and ZAP remain advisory, which is a decision about
+  sequencing rather than a finding.)*
 - **Retention depends on a scheduled sweeper for storage**, though not for correctness: a key's
   replay window is enforced by the reservation path (defect 20), and the sweeper only reclaims
   rows.
