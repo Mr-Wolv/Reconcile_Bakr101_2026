@@ -128,10 +128,40 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
+      # Dependency review is a GitHub feature, not a self-contained action: it needs the
+      # repository's dependency graph to be enabled, and no workflow can enable it. Where it is not
+      # enabled, the action fails in five seconds with "Dependency review is not supported on this
+      # repository" - a red job whose cause is a settings page, not anything in the pull request,
+      # and one that has been red on every pull request this repository has ever had.
+      #
+      # Probing the endpoint the action itself needs turns that into a stated skip. If it answers,
+      # the review below runs for real and fails on a high advisory as before; if it does not, the
+      # reason and the one-line fix are printed instead of an unexplained red. The probe is honest
+      # about what it is: while the feature is off, this job examines nothing, and the OSV scan in
+      # the same workflow is the coverage that is actually running.
+      - name: Check whether dependency review is available here
+        id: dependency-review
+        run: |
+          status=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            "${{ github.api_url }}/repos/${{ github.repository }}/dependency-graph/compare/${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}")
+          if [ "$status" = "200" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "dependency review is available (HTTP $status)"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::GitHub Dependency review is unavailable for this repository (HTTP" \
+                 "$status): its dependency graph is not enabled and no workflow can enable it."
+            echo "::warning::Enable it at https://github.com/${{ github.repository }}/settings/security_analysis" \
+                 "and this job starts reviewing dependencies again. Until then it examines nothing."
+          fi
+
       # `fail-on-severity: high` rather than the default. A moderate advisory added to a
       # simulated payment engine is a decision to record, not a build to block; a high or
       # critical one is not.
       - name: Review the dependencies this pull request adds
+        if: steps.dependency-review.outputs.available == 'true'
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294  # v5.0.0
         with:
           fail-on-severity: high
