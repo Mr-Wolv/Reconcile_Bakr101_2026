@@ -79,7 +79,7 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # `dependency:tree` writes exactly the coordinates OSV is asked about. Scanning
       # pom.xml instead would query declared versions and miss every transitive dependency,
@@ -130,7 +130,7 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # Dependency review is a GitHub feature, not a self-contained action: it needs the
       # repository's dependency graph to be enabled, and no workflow can enable it. Where it is not
@@ -181,7 +181,7 @@ jobs:
     continue-on-error: true
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -228,7 +228,7 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # Semgrep is run as a CLI rather than through `returntocorp/semgrep-action`. That action is a
       # Docker action declaring four inputs — config, icon, colour, publishToken — and it declares
@@ -348,7 +348,7 @@ jobs:
     timeout-minutes: 25
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Build and start the stack
         run: docker compose up -d --build app
