@@ -46,7 +46,7 @@
     <java.version>25</java.version>
     <maven.compiler.release>25</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <archunit.version>1.4.1</archunit.version>
+    <archunit.version>1.5.1</archunit.version>
     <!-- springdoc 3.x is the line that supports Spring Boot 4; 2.x is Boot 3 only. The `-api`
          artifact, not `-ui`: E2E-API-01 asks for a specification to diff against, not a browser
          console, and the UI would drag in a webjars bundle this application has no use for. -->
