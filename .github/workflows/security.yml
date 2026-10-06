@@ -22,9 +22,13 @@ name: security
 #           signed releases, dangerous workflows). Non-gating: it reports on the repository rather
 #           than on the code, so it starts red on any new repository and is a to-do list, not a
 #           build failure.
-#   zap   - an OWASP ZAP baseline scan against the running image. Scheduled only, and
-#           non-gating, because a baseline scan on a first run reports findings nobody has triaged
-#           yet and a red build nobody can act on is theatre. It uploads its report instead.
+#   zap   - an OWASP ZAP baseline scan against the running image. Non-gating on what it *finds*,
+#           because a baseline scan reports alerts nobody has triaged yet and a red build nobody
+#           can act on is theatre. What it does not tolerate is producing no evidence: it fails
+#           only when the scan leaves no report behind, which covers both "the scanner errored"
+#           and "the report could not be written". It uploads its report either way. (This said
+#           "Scheduled only", which was never true of the job - it has no event guard and runs on
+#           every trigger.)
 #
 # WHAT REPLACED WHAT
 # ------------------
@@ -111,7 +115,9 @@ jobs:
 
   # ---------------------------------------------------------------------------
   deps:
-    name: GitHub Advisory dependency review
+    # The reason is in the display name on purpose: the job is skipped on every push, and a
+    # greyed-out row with no explanation reads as something that failed to start.
+    name: GitHub Advisory dependency review (pull requests only)
     # Pull requests only. The action answers "what did this pull request *add*", which is
     # meaningless without a base to compare against - it has no answer on a push, and none on
     # the first commit of a repository.
@@ -299,9 +305,11 @@ jobs:
   zap:
     name: ZAP baseline scan
     runs-on: ubuntu-latest
-    # Not gating. A baseline scan reports everything it can find, including findings that are
-    # correct for this system (a bearer-token API answers 401 to a scanner's unauthenticated
-    # probe). Its job here is to produce evidence, not to stop a release.
+    # Not gating on findings. A baseline scan reports everything it can find, including findings
+    # that are correct for this system (a bearer-token API answers 401 to a scanner's
+    # unauthenticated probe). Its job here is to produce evidence, not to stop a release over an
+    # untriaged alert. The scan step below still fails on its own errors, so a red job here means
+    # the scanner could not run - which is a defect in this workflow, not a finding in the code.
     continue-on-error: true
     timeout-minutes: 25
 
@@ -328,24 +336,92 @@ jobs:
 
       # `--network=host` so the container can reach the compose-published port on localhost, which
       # is how `docker-compose.yml` publishes it.
+      #
+      # The report directory is created and opened up here, and that is not housekeeping. The image
+      # runs as its own `zap` user (uid 1000) while the checked-out workspace belongs to the runner,
+      # so without the `mkdir` Docker creates the bind source as root:root and every write into it
+      # fails with `Permission denied: '/zap/wrk/zap.yaml'`. That was this job's actual failure on
+      # every run: not a finding, but the scanner unable to write a report, exiting 2 while printing
+      # `FAIL-NEW: 0`. A zero-finding scan that produces no artifact and a red X is worse than
+      # either half on its own.
+      #
+      # Exit codes are the evidence policy, and they were read off the script rather than guessed
+      # (an earlier draft of this comment had "2 or more means it did not complete", which is
+      # wrong and would have failed the job on this application's normal outcome):
+      #
+      #   0  nothing found
+      #   1  a FAIL alert was recorded
+      #   2  a WARN alert was recorded
+      #   3  nothing was scanned, or an exception was raised
+      #
+      # The first three all mean the scan ran and left evidence; alerts are what a baseline scan is
+      # *for*, and nobody has triaged them yet, so none of them fails the job. This application
+      # normally lands on 2 - its root answers 401 to an unauthenticated spider, which ZAP records
+      # as a warning - so a policy that failed here would fail on every run. 3 is the case that
+      # lacks evidence, and the report assertion below is the check that is not reachable through
+      # the exit code alone: the job's actual failure was exit 2, `FAIL-NEW: 0`, and not one byte
+      # written, because the scan could not write into a directory owned by the runner.
       - name: Baseline scan
         run: |
+          mkdir -p zap-report
+          chmod 777 zap-report
+          status=0
           docker run --rm --network=host \
             -v "$PWD/zap-report:/zap/wrk:rw" \
             ghcr.io/zaproxy/zaproxy:stable \
-            zap-baseline.py -t http://127.0.0.1:8080 -r zap-report.html -J zap-report.json
+            zap-baseline.py -t http://127.0.0.1:8080 -r zap-report.html -J zap-report.json \
+            || status=$?
+          if [ "$status" -eq 3 ]; then
+            echo "::error::the ZAP baseline scan did not run (exit 3: nothing scanned, or an"
+            echo "::error::exception) - there is no evidence behind this job"
+            exit 1
+          fi
+          if [ "$status" -ge 4 ]; then
+            echo "::error::the ZAP baseline scan returned an unexpected exit status $status"
+            exit 1
+          fi
+          # Where the report lands is not where it looks like it lands. The image's WORKDIR is
+          # `/zap`, and `zap-baseline.py` chdirs into `/zap/wrk` — the mount — once a file-based
+          # option is given, so `-J zap-report.json` writes `zap-report/zap-report.json` on the
+          # runner and not `./zap-report.json`. Every reader below has to agree with that, and the
+          # previous version did not: it looked in the workspace root, which is the second reason
+          # this job never uploaded a byte.
+          test -s zap-report/zap-report.json || {
+            echo "::error::no ZAP report at zap-report/zap-report.json - the scan exited $status"
+            echo "::error::but wrote nothing, so this run has no evidence whatever the exit said"
+            exit 1
+          }
+          echo "ZAP baseline completed: exit $status (0 clean, 1 FAIL alerts, 2 WARN alerts)"
 
       - name: Report
         if: always()
         run: |
-          test -f zap-report.html || { echo "::warning::no ZAP report produced"; exit 0; }
+          test -f zap-report/zap-report.html || { echo "::warning::no ZAP report produced"; exit 0; }
           python3 - <<'PY'
           import json, sys
-          with open("zap-report.json") as fh:
+          with open("zap-report/zap-report.json") as fh:
               report = json.load(fh)
-          for site, site_report in report.items():
-              for alert in site_report.get("alerts", []):
-                  print(f"{alert.get('riskdesc')}: {alert.get('alert')}")
+
+          # ZAP's JSON document is {"site": [{"@name": ..., "alerts": [...]}]} - a *list* of sites,
+          # each holding its own alerts. The previous version iterated the document as a
+          # {site: report} mapping and called `.get` on the site key, which is a string: it would
+          # have raised AttributeError the first time a report existed. It never did, so the bug
+          # stayed invisible behind the guard above, which is the failure mode this whole job is
+          # about - code that has never run being read as code that works.
+          sites = report.get("site") or []
+          if not isinstance(sites, list):
+              sites = [sites]
+          alerts = 0
+          for site in sites:
+              print(f"site {site.get('@name', '(unnamed)')}")
+              for alert in site.get("alerts", []):
+                  alerts += 1
+                  print(f"  {alert.get('riskdesc')}: {alert.get('alert')}")
+          print(f"zap recorded {alerts} alert(s) over {len(sites)} site(s)")
+          if not sites:
+              print("::error::the ZAP report names no sites - the scan produced a document but "
+                    "scanned nothing, which is not a clean result")
+              sys.exit(1)
           PY
 
       - name: Upload the report
@@ -353,8 +429,12 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: zap-report
-          path: zap-report.html
-          if-no-files-found: ignore
+          path: |
+            zap-report/zap-report.html
+            zap-report/zap-report.json
+          # `error`, not `ignore`. The whole reason this job exists is the evidence, and a run that
+          # uploads nothing while showing a green tick is the failure mode it was written against.
+          if-no-files-found: error
           retention-days: 30
 
       - name: Tear down

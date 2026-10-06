@@ -152,6 +152,9 @@ jobs:
   # and anyone can replay any of them from the log. Non-gating: it is a search, and a search that
   # breaks the build on its first finding is a search that gets switched off.
   soak:
+    # The reason is in the display name on purpose: the job is skipped on every push and pull
+    # request, and a greyed-out row with no explanation reads as something that failed to start.
+    name: Ordering soak (nightly schedule only)
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 25
