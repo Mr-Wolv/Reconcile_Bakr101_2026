@@ -170,7 +170,7 @@ These are deliberate and documented rather than fixed:
   concurrency groups, artifact upload, and the Semgrep, Scorecard and ZAP steps are all unexercised,
   and actions are referenced by tag rather than by commit SHA because an invented SHA is a workflow
   that fails at its first step. Treat the first run of each as a measurement.
-- **SAST and a penetration scan are configured and have never run.** Semgrep over `p/spring` gates
+- **SAST and a penetration scan are configured and have never run.** Semgrep over `p/java` gates
   on `ERROR` severity; GitHub dependency review gates on high; Scorecard and ZAP baseline scanning
   are non-gating and upload their reports. The first ZAP run will report findings nobody has
   triaged, which is why it does not gate — a decision about sequencing, not evidence that the

@@ -145,6 +145,7 @@ class WebhookWithoutDatabaseIT {
         HttpResponse<String> duringOutage = send(eventId, body, currentTs());
 
         grantConnect();
+        awaitTheApplicationCanReachTheDatabaseAgain();
 
         assertThat(duringOutage.statusCode())
                 .as("a database that cannot be reached is our fault, not the provider's, so it "
@@ -212,6 +213,38 @@ class WebhookWithoutDatabaseIT {
             statement.execute("GRANT CONNECT ON DATABASE reconcile_outage TO " + APP_ROLE);
             statement.execute("GRANT CONNECT ON DATABASE reconcile_outage TO PUBLIC");
         });
+    }
+
+    /**
+     * Waits until the application — not the test — can reach the database again.
+     *
+     * <p>Restoring {@code CONNECT} restores the privilege; it does not restore the pool. The
+     * connections that were terminated while it was revoked are still in Hikari's idle set, and
+     * Hikari only revalidates a connection it has not used for 500 ms, so the first request after
+     * the grant can be handed a corpse and fail. That failure says nothing about the durable inbox,
+     * which is what this test is about — it says the pool had not caught up yet.
+     *
+     * <p>Probing a database-backed endpoint until it answers drains those dead connections, because
+     * every borrow that finds one evicts it, and it makes the redelivery below deterministic
+     * instead of a race against the pool's housekeeping. It does not relax any assertion: the
+     * outage assertions above and the exactly-once assertions below are unchanged. It makes true the
+     * precondition the contract states — "redelivery succeeds once the database returns" — which in
+     * production is satisfied by the provider's retry backoff rather than by a request issued
+     * milliseconds after {@code CONNECT} is restored.
+     */
+    private void awaitTheApplicationCanReachTheDatabaseAgain() throws Exception {
+        HttpRequest probe = HttpRequest.newBuilder()
+                .uri(URI.create("http://127.0.0.1:" + port + "/api/v1/health"))
+                .GET()
+                .build();
+        for (int attempt = 1; attempt <= 120; attempt++) {
+            if (http.send(probe, HttpResponse.BodyHandlers.ofString()).statusCode() == 200) {
+                return;
+            }
+            Thread.sleep(250);
+        }
+        throw new AssertionError("the application never reached the database again: /api/v1/health "
+                + "did not answer 200 within 30 seconds of CONNECT being restored");
     }
 
     /** Runs a statement as the container's superuser, which the revoked privilege does not stop. */

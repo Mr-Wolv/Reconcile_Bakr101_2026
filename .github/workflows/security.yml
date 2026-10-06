@@ -199,15 +199,23 @@ jobs:
       # not be verified from here, so the CLI is used directly: one fewer third-party action to
       # trust, and every flag is visible in this file.
       #
-      # `p/spring` rather than `--config auto`. The automatic ruleset is the largest and slowest and
+      # `p/java` rather than `--config auto`. The automatic ruleset is the largest and slowest and
       # changes under you; a pinned ruleset makes a red build reproducible, which is the only
       # property that makes a gate worth having.
+      #
+      # This was `p/spring`, and that is the whole reason the job failed on its first hosted run.
+      # Semgrep retired the language-specific Spring rulesets upstream: `p/spring`, `p/java-spring`
+      # and `p/springboot` now all answer HTTP 404. A 404 is not an error Semgrep raises loudly —
+      # it writes the problem into `toolExecutionNotifications`, loads **zero rules**, emits a SARIF
+      # with an empty `results` array, and exits 7. The gate below, had it been reached, would have
+      # read those zero results and declared the codebase clean. See the non-vacuity check for why
+      # that is now impossible.
       - name: Run Semgrep
         run: |
           python3 -m pip install --quiet semgrep
           # No `--error` here: the gate is the SARIF parse in the next step, so that what fails the
           # build is visible in this repository rather than buried in a tool's exit-code policy.
-          semgrep scan --config p/spring --sarif --output semgrep.sarif --quiet src
+          semgrep scan --config p/java --sarif --output semgrep.sarif --quiet src
 
       - name: Fail on ERROR-severity findings
         # Done by hand rather than trusting the action's exit code, because the action's severity
@@ -221,16 +229,59 @@ jobs:
           import json, sys
           with open("semgrep.sarif") as fh:
               sarif = json.load(fh)
+
+          # Non-vacuity, before any counting. A scan that loaded no rules produces a well-formed
+          # SARIF whose `results` is empty, and "zero findings" from a scanner that never ran is
+          # indistinguishable from a clean bill of health unless something checks. That is the
+          # failure this job actually had: `p/spring` 404'd, zero rules loaded, zero results, and
+          # only Semgrep's exit code stood between that and a green tick on a security gate.
+          # Two conditions mean "nothing was scanned", and both fail here:
+          #
+          # The same pass builds the rule-id -> severity map the gate below needs. It is not
+          # bookkeeping: see the comment on `level` there for why `result.level` cannot be read.
+          rules = 0
+          errors = []
+          rule_levels = {}
+          for run in sarif.get("runs", []):
+              driver = run.get("tool", {}).get("driver", {})
+              loaded = driver.get("rules", [])
+              rules += len(loaded)
+              for rule in loaded:
+                  severity = (rule.get("defaultConfiguration") or {}).get("level") or "warning"
+                  rule_levels[rule.get("id")] = severity
+              for invocation in run.get("invocations", []):
+                  for note in invocation.get("toolExecutionNotifications", []):
+                      if note.get("descriptor", {}).get("id") == "SemgrepError":
+                          errors.append(note.get("message", {}).get("text", "(no message)"))
+          if errors:
+              for message in errors:
+                  print(f"  semgrep error: {message}")
+          if rules == 0 or errors:
+              print(f"::error::semgrep scanned nothing: {rules} rule(s) loaded, "
+                    f"{len(errors)} tool error(s). A zero-finding result from a scan that did not "
+                    f"run is not a clean result.")
+              sys.exit(1)
+          print(f"scanned with {rules} rule(s) loaded")
+
           blocking = []
           for run in sarif.get("runs", []):
               for result in run.get("results", []):
-                  level = (result.get("level") or "").upper()
+                  # Severity is read from the RULE, not from the result. SARIF 2.1.0 says a result
+                  # with no `level` inherits its rule's `defaultConfiguration.level`, and Semgrep
+                  # writes severity *only* to the rule - a rule declared `severity: ERROR` produces
+                  # results with no `level` field at all. This gate previously read `result.level`,
+                  # so it saw no severity on any finding and could never block one: an ERROR-only
+                  # gate that a 51-finding ERROR scan passed was the exact "check that cannot
+                  # fail" this repository keeps calling worse than no check. The result's own
+                  # `level` is still preferred when a scanner does set it.
+                  level = (result.get("level")
+                           or rule_levels.get(result.get("ruleId"), "warning")).upper()
                   if level in ("ERROR", "BLOCKER"):
                       blocking.append(result)
           print(f"{len(blocking)} ERROR-severity finding(s)")
           for result in blocking[:20]:
               where = result.get("locations", [{}])[0].get("physicalLocation", {})
-              print(f"  {result.get('check_id')} {where.get('artifactLocation', {}).get('uri')}"
+              print(f"  {result.get('ruleId')} {where.get('artifactLocation', {}).get('uri')}"
                     f":{where.get('region', {}).get('startLine')}")
           sys.exit(1 if blocking else 0)
           PY

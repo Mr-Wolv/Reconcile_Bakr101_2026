@@ -391,7 +391,7 @@ string-building anywhere, in main code or tests. A rejected webhook records an o
 never the signature or the token.
 
 **What has not been done.** Static analysis and a penetration scan are now *configured* —
-[`.github/workflows/security.yml`](.github/workflows/security.yml) runs Semgrep over `p/spring` on
+[`.github/workflows/security.yml`](.github/workflows/security.yml) runs Semgrep over `p/java` on
 every push, GitHub's dependency review on every pull request, and scheduled OSSF Scorecard and OWASP
 ZAP baseline scans against the running image — and **none has ever run**, because nothing in this
 repository can execute a GitHub Actions workflow. The same is true of every other workflow here: they

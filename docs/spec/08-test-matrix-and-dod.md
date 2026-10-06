@@ -417,7 +417,7 @@ and the roadmap is the answer to it.
   by tag rather than by commit SHA; an invented SHA is a workflow that fails at its first step, and
   pinning them is a one-pass job from a machine with network access
   ([`docs/roadmap.md §4`](../roadmap.md)).
-- Static analysis and a penetration test are now *configured* (Semgrep over `p/spring`, gating at
+- Static analysis and a penetration test are now *configured* (Semgrep over `p/java`, gating at
   `ERROR` severity; OWASP ZAP baseline scan against the running image, scheduled and non-gating with
   the report uploaded; OSSF Scorecard for supply-chain posture) and none has ever run. ZAP's first
   run on this application will report findings nobody has triaged, which is why it does not gate;
