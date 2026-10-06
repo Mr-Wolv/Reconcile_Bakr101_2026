@@ -45,7 +45,7 @@ jobs:
     timeout-minutes: 300
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # Without this the job starts from an empty NVD store on every run and cannot complete in
       # any realistic window. Keyed on the run id with a prefix restore, so consecutive runs share
