@@ -92,11 +92,11 @@ def latest_successful_soak_run(api, repository, token):
                f"?workflow_id={WORKFLOW}&event={event}&per_page=100")
         while url:
             payload = api_get(url, token)
-            # Runs are returned newest first; the first match on this page is
-            # the newest success for this event *one this page* — but a
-            # previous page may hold an even newer one, so every page is
-            # scanned.
-            for run in payload.get("runs", []):
+            # Runs are returned under ``workflow_runs``, newest first; the
+            # first match on this page is the newest success for this event
+            # *on this page* — but a later page may hold an even newer one,
+            # so every page is scanned.
+            for run in payload.get("workflow_runs", []):
                 if (run.get("event") in SOAK_EVENTS
                         and run.get("conclusion") == "success"):
                     if latest is None or run["created_at"] > latest["created_at"]:
